@@ -57,11 +57,18 @@ impl EventPathFilter {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct Summary<'a> {
     path: &'a str,
-    additions: Vec<&'a str>,
-    deletions: Vec<&'a str>,
+    additions: Vec<Vec<&'a str>>,
+    deletions: Vec<Vec<&'a str>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SummaryJsonFormatter {
+    path: String,
+    additions: String,
+    deletions: String,
 }
 
 impl<'a> Summary<'a> {
@@ -79,14 +86,26 @@ impl<'a> Summary<'a> {
             _ => return Summary::new(""),
         };
 
+        let mut last_was_addition = false;
         for event in source {
             match event {
                 // These branches filter out the BOM.
                 Event::Addition(addition) if addition != "∩╗┐" => {
-                    summary.additions.push(addition)
+                    if summary.additions.is_empty() || !last_was_addition {
+                        last_was_addition = true;
+                        summary.additions.push(vec![addition]);
+                    } else {
+                        summary.additions.last_mut().unwrap().push(addition)
+                    }
                 }
+
                 Event::Deletion(deletion) if deletion != "∩╗┐" => {
-                    summary.deletions.push(deletion)
+                    if summary.deletions.is_empty() || last_was_addition {
+                        last_was_addition = false;
+                        summary.deletions.push(vec![deletion]);
+                    } else {
+                        summary.deletions.last_mut().unwrap().push(deletion);
+                    }
                 }
 
                 // We're really not interested in the munged byte order mark.
@@ -97,6 +116,39 @@ impl<'a> Summary<'a> {
         }
 
         summary
+    }
+
+    fn to_json_formatter(self) -> SummaryJsonFormatter {
+        fn format_changes<'a>(changes: Vec<Vec<&'a str>>) -> String {
+            let mut buf = String::new();
+            let mut change_sets = changes.into_iter();
+
+            if let Some(initial) = change_sets.next() {
+                for line in initial {
+                    buf += line;
+                    buf += "\n";
+                }
+            }
+
+            for set in change_sets {
+                buf += " ...\n";
+                for line in set {
+                    buf += line;
+                    buf += "\n";
+                }
+            }
+
+            buf
+        }
+
+        let additions = format_changes(self.additions);
+        let deletions = format_changes(self.deletions);
+
+        SummaryJsonFormatter {
+            path: self.path.into(),
+            additions,
+            deletions,
+        }
     }
 }
 
@@ -174,7 +226,10 @@ fn main() -> io::Result<()> {
         .filter_map(select_event)
         .filter(|event| filter.take(event));
 
-    let change_summaries: Vec<_> = SummaryAdapter::new(events).collect();
+    let change_summaries: Vec<_> = SummaryAdapter::new(events)
+        .map(|x| x.to_json_formatter())
+        .collect();
+
     serde_json::to_writer_pretty(&mut std::io::stdout(), &change_summaries)?;
     Ok(())
 }
