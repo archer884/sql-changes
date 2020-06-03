@@ -1,4 +1,4 @@
-use std::iter::{self, FromIterator};
+use std::iter;
 
 #[derive(Clone, Debug)]
 enum Event<'a> {
@@ -76,11 +76,8 @@ impl<'a> Summary<'a> {
             deletions: Vec::new(),
         }
     }
-}
 
-impl<'a> FromIterator<Event<'a>> for Summary<'a> {
-    fn from_iter<T: IntoIterator<Item = Event<'a>>>(iter: T) -> Self {
-        let mut source = iter.into_iter();
+    fn from_events<I: Iterator<Item = Event<'a>>>(source: iter::Peekable<I>) -> Self {
         let mut summary = match source.next() {
             Some(Event::Diff(diff)) => Summary::new(diff.right),
             _ => return Summary::new(""),
@@ -163,7 +160,7 @@ impl<'a, T: Iterator<Item = Event<'a>>> Iterator for SummaryAdapter<'a, T> {
             has_emitted = true;
             result
         });
-        Some(partition.collect())
+        Some(Summary::from_events(partition.peekable()))
     }
 }
 
