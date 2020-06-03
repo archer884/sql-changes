@@ -1,18 +1,24 @@
-use std::iter;
+use serde::Serialize;
+use std::io::Read;
+use std::{fs, io, iter};
+use structopt::StructOpt;
+
+#[derive(Debug, StructOpt)]
+struct Opt {
+    path: Option<String>,
+}
+
+impl Opt {
+    fn path(&self) -> Option<&str> {
+        self.path.as_ref().map(AsRef::as_ref)
+    }
+}
 
 #[derive(Clone, Debug)]
 enum Event<'a> {
-    // diff --git a/DocGen/DeployToCi.scmp b/DocGen/DeployToCi.scmp
     Diff(Diff<'a>),
-
-    // +some text
     Addition(&'a str),
-
-    // -some text here
     Deletion(&'a str),
-
-    // new file
-    NewFile,
 }
 
 impl Event<'_> {
@@ -51,21 +57,11 @@ impl EventPathFilter {
     }
 }
 
-#[derive(Debug, Default)]
-struct AdditionSummary<'a> {
-    additions: Vec<&'a str>,
-}
-
-#[derive(Debug, Default)]
-struct DeletionSummary<'a> {
-    deletions: Vec<&'a str>,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct Summary<'a> {
     path: &'a str,
-    additions: Vec<AdditionSummary<'a>>,
-    deletions: Vec<DeletionSummary<'a>>,
+    additions: Vec<&'a str>,
+    deletions: Vec<&'a str>,
 }
 
 impl<'a> Summary<'a> {
@@ -77,32 +73,30 @@ impl<'a> Summary<'a> {
         }
     }
 
-    fn from_events<I: Iterator<Item = Event<'a>>>(source: iter::Peekable<I>) -> Self {
+    fn from_events<I: Iterator<Item = Event<'a>>>(mut source: iter::Peekable<I>) -> Self {
         let mut summary = match source.next() {
             Some(Event::Diff(diff)) => Summary::new(diff.right),
             _ => return Summary::new(""),
         };
 
-        let mut last_was_addition = false;
         for event in source {
             match event {
-                Event::Addition(addition) => {
-                    if summary.additions.is_empty() || !last_was_addition {
-                        last_was_addition = true;
-                        let mut additions = AdditionSummary::default();
-                        additions.additions.push(addition);
-                        summary.additions.push(additions);
-                    }
+                // These branches filter out the BOM.
+                Event::Addition(addition) if addition != "∩╗┐" => {
+                    summary.additions.push(addition)
+                }
+                Event::Deletion(deletion) if deletion != "∩╗┐" => {
+                    summary.deletions.push(deletion)
                 }
 
-                Event::Deletion(deletion) => {
-
-                }
+                // We're really not interested in the munged byte order mark.
+                Event::Addition(_) | Event::Deletion(_) => (),
 
                 _ => panic!("Shouldn't be possible to receive a second Event::Diff"),
             }
         }
-        unimplemented!()
+
+        summary
     }
 }
 
@@ -136,48 +130,53 @@ where
     }
 }
 
-struct SummaryAdapter<'a, I: Iterator> {
+struct SummaryAdapter<I: Iterator> {
     source: iter::Peekable<I>,
-    summary: Option<Summary<'a>>,
 }
 
-impl<'a, I: Iterator<Item = Event<'a>>> SummaryAdapter<'a, I> {
-    fn new(source: I) -> SummaryAdapter<'a, I> {
+impl<'a, I: Iterator<Item = Event<'a>>> SummaryAdapter<I> {
+    fn new(source: I) -> SummaryAdapter<I> {
         Self {
             source: source.peekable(),
-            summary: None,
         }
     }
 }
 
-impl<'a, T: Iterator<Item = Event<'a>>> Iterator for SummaryAdapter<'a, T> {
+impl<'a, T: Iterator<Item = Event<'a>>> Iterator for SummaryAdapter<T> {
     type Item = Summary<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut has_emitted = true;
+        let mut has_emitted = false;
         let partition = Partition::new(&mut self.source, |event| {
-            let result = !has_emitted || event.is_diff();
+            let result = !has_emitted || !event.is_diff();
             has_emitted = true;
             result
         });
-        Some(Summary::from_events(partition.peekable()))
+
+        let mut partition = partition.peekable();
+        if partition.peek().is_some() {
+            Some(Summary::from_events(partition))
+        } else {
+            None
+        }
     }
 }
 
-fn main() {
-    // FIXME: obviously, this path ain't gonna work.
+fn main() -> io::Result<()> {
+    let input = match Opt::from_args().path() {
+        Some(path) => fs::read_to_string(path)?,
+        None => read_stdin()?,
+    };
+
     let mut filter = EventPathFilter::new("/dbo/");
-    let input = include_str!("../../../Documents/diff.txt");
     let events = input
         .lines()
         .filter_map(select_event)
         .filter(|event| filter.take(event));
 
-    let mut count = 0;
-    for summary in SummaryAdapter::new(events) {
-        count += 1;
-        println!("{}: {:?}", count, summary);
-    }
+    let change_summaries: Vec<_> = SummaryAdapter::new(events).collect();
+    serde_json::to_writer_pretty(&mut std::io::stdout(), &change_summaries)?;
+    Ok(())
 }
 
 fn select_event(s: &str) -> Option<Event> {
@@ -206,4 +205,10 @@ fn build_diff(s: &str) -> Option<Diff> {
         left: s[left + 2..right].trim(),
         right: &s[right + 2..],
     })
+}
+
+fn read_stdin() -> io::Result<String> {
+    let mut buf = String::new();
+    io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
 }
