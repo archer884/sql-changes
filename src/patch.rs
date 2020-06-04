@@ -1,3 +1,4 @@
+use serde::Serialize;
 use regex::Regex;
 
 #[derive(Debug)]
@@ -7,9 +8,9 @@ pub struct Header<'a> {
     date: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Changeset<'a> {
-    header: &'a Header<'a>,
+    // header: &'a Header<'a>,
     path: &'a str,
     additions: Vec<&'a str>,
     deletions: Vec<&'a str>,
@@ -86,24 +87,19 @@ pub struct ChangesetParser {
 
 impl ChangesetParser {
     pub fn new() -> Self {
-        ChangesetParser { diff_pattern: Regex::new(r#"diff --git a/(.+) b/(.+)"#).unwrap() }
-    }
-
-    pub fn changesets<'a, 't>(&'a self, header: &'t Header<'t>, text: &'t str) -> Changesets<'a, 't> {
-        Changesets {
-            parser: self,
-            header,
-            text
+        ChangesetParser {
+            diff_pattern: Regex::new(r#"diff --git a/(.+) b/(.+)"#).unwrap(),
         }
     }
 
+    pub fn changesets<'a, 't>(&'a self, text: &'t str) -> Changesets<'a, 't> {
+        Changesets { parser: self, text }
+    }
+
     fn read_path<'a>(&self, text: &'a str) -> Option<(usize, &'a str)> {
-        self.diff_pattern.captures(text).map(|x| {
-            (
-                x.get(0).unwrap().end(),
-                x.get(2).unwrap().as_str().trim()
-            )
-        })
+        self.diff_pattern
+            .captures(text)
+            .map(|x| (x.get(0).unwrap().end(), x.get(2).unwrap().as_str().trim()))
     }
 
     fn locations<'a>(&'a self, text: &'a str) -> impl Iterator<Item = usize> + 'a {
@@ -113,7 +109,7 @@ impl ChangesetParser {
 
 pub struct Changesets<'a, 't> {
     parser: &'a ChangesetParser,
-    header: &'t Header<'t>,
+    // header: &'t Header<'t>,
     text: &'t str,
 }
 
@@ -152,7 +148,7 @@ impl<'a, 't> Iterator for Changesets<'a, 't> {
         }
 
         Some(Changeset {
-            header: self.header,
+            // header: self.header,
             path,
             additions,
             deletions,
