@@ -1,3 +1,4 @@
+use regex::Regex;
 use serde::Serialize;
 use std::io::Read;
 use std::{fs, io, iter};
@@ -16,6 +17,7 @@ impl Opt {
 
 #[derive(Clone, Debug)]
 enum Event<'a> {
+    Commit(&'a str),
     Diff(Diff<'a>),
     Addition(&'a str),
     Deletion(&'a str),
@@ -59,6 +61,7 @@ impl EventPathFilter {
 
 #[derive(Debug)]
 struct Summary<'a> {
+    commit: Option<&'a str>,
     path: &'a str,
     additions: Vec<Vec<&'a str>>,
     deletions: Vec<Vec<&'a str>>,
@@ -66,6 +69,7 @@ struct Summary<'a> {
 
 #[derive(Debug, Serialize)]
 struct SummaryJsonFormatter {
+    commit: Option<String>,
     path: String,
     additions: String,
     deletions: String,
@@ -74,48 +78,15 @@ struct SummaryJsonFormatter {
 impl<'a> Summary<'a> {
     fn new(path: &'a str) -> Self {
         Self {
+            commit: None,
             path,
             additions: Vec::new(),
             deletions: Vec::new(),
         }
     }
 
-    fn from_events<I: Iterator<Item = Event<'a>>>(mut source: iter::Peekable<I>) -> Self {
-        let mut summary = match source.next() {
-            Some(Event::Diff(diff)) => Summary::new(diff.right),
-            _ => return Summary::new(""),
-        };
-
-        let mut last_was_addition = false;
-        for event in source {
-            match event {
-                // These branches filter out the BOM.
-                Event::Addition(addition) if addition != "∩╗┐" => {
-                    if summary.additions.is_empty() || !last_was_addition {
-                        last_was_addition = true;
-                        summary.additions.push(vec![addition]);
-                    } else {
-                        summary.additions.last_mut().unwrap().push(addition)
-                    }
-                }
-
-                Event::Deletion(deletion) if deletion != "∩╗┐" => {
-                    if summary.deletions.is_empty() || last_was_addition {
-                        last_was_addition = false;
-                        summary.deletions.push(vec![deletion]);
-                    } else {
-                        summary.deletions.last_mut().unwrap().push(deletion);
-                    }
-                }
-
-                // We're really not interested in the munged byte order mark.
-                Event::Addition(_) | Event::Deletion(_) => (),
-
-                _ => panic!("Shouldn't be possible to receive a second Event::Diff"),
-            }
-        }
-
-        summary
+    fn set_hash(&mut self, hash: &'a str) {
+        self.commit = Some(hash);
     }
 
     fn to_json_formatter(self) -> SummaryJsonFormatter {
@@ -145,6 +116,7 @@ impl<'a> Summary<'a> {
         let deletions = format_changes(self.deletions);
 
         SummaryJsonFormatter {
+            commit: self.commit.map(Into::into),
             path: self.path.into(),
             additions,
             deletions,
@@ -182,35 +154,80 @@ where
     }
 }
 
-struct SummaryAdapter<I: Iterator> {
+struct SummaryAdapter<'a, I: Iterator + 'a> {
     source: iter::Peekable<I>,
+    commit: Option<&'a str>,
 }
 
-impl<'a, I: Iterator<Item = Event<'a>>> SummaryAdapter<I> {
-    fn new(source: I) -> SummaryAdapter<I> {
+impl<'a, I: Iterator<Item = Event<'a>> + 'a> SummaryAdapter<'a, I> {
+    fn new(source: I) -> SummaryAdapter<'a, I> {
         Self {
             source: source.peekable(),
+            commit: None,
         }
     }
 }
 
-impl<'a, T: Iterator<Item = Event<'a>>> Iterator for SummaryAdapter<T> {
+impl<'a, T: Iterator<Item = Event<'a>>> Iterator for SummaryAdapter<'a, T> {
     type Item = Summary<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut has_emitted = false;
-        let partition = Partition::new(&mut self.source, |event| {
+        let mut partition = Partition::new(&mut self.source, |event| {
             let result = !has_emitted || !event.is_diff();
-            has_emitted = true;
+            if event.is_diff() {
+                has_emitted = true;
+            }
             result
         });
 
-        let mut partition = partition.peekable();
-        if partition.peek().is_some() {
-            Some(Summary::from_events(partition))
-        } else {
-            None
+        let mut summary = match partition.next() {
+            Some(Event::Diff(diff)) => Summary::new(diff.right),
+            _ => return None,
+        };
+
+        let mut last_was_addition = false;
+        for event in partition {
+            match event {
+                Event::Commit(hash) => {
+                    if let Some(x) = self.commit {
+                        summary.set_hash(x);
+                    }
+                    self.commit = Some(hash);
+                    return Some(summary);
+                }
+                
+                // These branches filter out the BOM.
+                Event::Addition(addition) if addition != "∩╗┐" => {
+                    if summary.additions.is_empty() || !last_was_addition {
+                        last_was_addition = true;
+                        summary.additions.push(vec![addition]);
+                    } else {
+                        summary.additions.last_mut().unwrap().push(addition)
+                    }
+                }
+
+                Event::Deletion(deletion) if deletion != "∩╗┐" => {
+                    if summary.deletions.is_empty() || last_was_addition {
+                        last_was_addition = false;
+                        summary.deletions.push(vec![deletion]);
+                    } else {
+                        summary.deletions.last_mut().unwrap().push(deletion);
+                    }
+                }
+
+                // We're really not interested in the munged byte order mark.
+                Event::Addition(_) | Event::Deletion(_) => (),
+
+                _ => panic!("Shouldn't be possible to receive a second Event::Diff"),
+            }
         }
+
+        if let Some(x) = self.commit {
+            summary.set_hash(x);
+        }
+
+        Some(summary)
     }
 }
 
@@ -221,9 +238,10 @@ fn main() -> io::Result<()> {
     };
 
     let mut filter = EventPathFilter::new("/dbo/");
+    let selector = EventSelector::new();
     let events = input
         .lines()
-        .filter_map(select_event)
+        .filter_map(|x| selector.select_event(x))
         .filter(|event| filter.take(event));
 
     let change_summaries: Vec<_> = SummaryAdapter::new(events)
@@ -234,24 +252,38 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn select_event(s: &str) -> Option<Event> {
-    if s.is_empty() || s.len() < 2 {
-        return None;
+struct EventSelector {
+    commit_pattern: Regex,
+}
+
+impl EventSelector {
+    pub fn new() -> Self {
+        Self { commit_pattern: Regex::new(r#"From ([A-z0-9]{40})"#).unwrap() }
     }
 
-    if s.starts_with('+') && !s.starts_with("+++") {
-        return Some(Event::Addition(&s[1..]));
-    }
+    pub fn select_event<'a>(&self, s: &'a str) -> Option<Event<'a>> {
+        if s.is_empty() || s.len() < 2 {
+            return None;
+        }
+    
+        if s.starts_with('+') && !s.starts_with("+++") {
+            return Some(Event::Addition(&s[1..]));
+        }
+    
+        if s.starts_with('-') && !s.starts_with("---") {
+            return Some(Event::Deletion(&s[1..]));
+        }
+    
+        if s.starts_with("diff --git") {
+            return build_diff(s).map(Event::Diff);
+        }
+    
+        if let Some(x) = self.commit_pattern.captures(s) {
+            return Some(Event::Commit(x.get(1).unwrap().as_str()));
+        }
 
-    if s.starts_with('-') && !s.starts_with("---") {
-        return Some(Event::Deletion(&s[1..]));
+        None
     }
-
-    if s.starts_with("diff --git") {
-        return build_diff(s).map(Event::Diff);
-    }
-
-    None
 }
 
 fn build_diff(s: &str) -> Option<Diff> {
