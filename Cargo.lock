@@ -36,6 +36,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 
 [[package]]
+name = "bumpalo"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e8c087f005730276d1096a652e92a8bacee2e2472bcc9715a74d2bec38b5820"
+
+[[package]]
 name = "clap"
 version = "2.33.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -195,6 +201,7 @@ dependencies = [
 name = "sql-changes"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "regex",
  "serde",
  "serde_json",
