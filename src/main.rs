@@ -15,6 +15,7 @@ fn main() -> io::Result<()> {
     let sets: Vec<_> = cparser
         .changesets(&patch)
         .filter(|x| x.path().contains("/dbo/"))
+        .map(|x| x.to_json_formatter())
         .collect();
 
     serde_json::to_writer_pretty(&mut std::io::stdout(), &sets)?;

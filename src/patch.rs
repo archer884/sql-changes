@@ -1,5 +1,5 @@
-use serde::Serialize;
 use regex::Regex;
+use serde::Serialize;
 
 #[derive(Debug)]
 pub struct Header<'a> {
@@ -16,9 +16,24 @@ pub struct Changeset<'a> {
     deletions: Vec<&'a str>,
 }
 
-impl Changeset<'_> {
+#[derive(Debug, Serialize)]
+pub struct ChangesetJsonFormatter<'a> {
+    path: &'a str,
+    additions: String,
+    deletions: String,
+}
+
+impl<'a> Changeset<'a> {
     pub fn path(&self) -> &str {
         self.path
+    }
+
+    pub fn to_json_formatter(self) -> ChangesetJsonFormatter<'a> {
+        ChangesetJsonFormatter {
+            path: self.path,
+            additions: self.additions.join("\n"),
+            deletions: self.deletions.join("\n"),
+        }
     }
 }
 
