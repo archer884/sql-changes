@@ -1,4 +1,5 @@
 use regex::Regex;
+use serde::Serialize;
 
 #[derive(Debug)]
 pub struct Header<'a> {
@@ -18,6 +19,42 @@ pub struct Changeset<'a> {
 impl Changeset<'_> {
     pub fn path(&self) -> &str {
         self.path
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangesetCsvFormatter<'a> {
+    #[serde(rename = "File")]
+    path: &'a str,
+    #[serde(rename = "Deletions")]
+    deletions: String,
+    #[serde(rename = "Additions")]
+    additions: String,
+}
+
+impl<'a> ChangesetCsvFormatter<'a> {
+    pub fn new(changes: &'a Changeset) -> Self {
+        fn join_strings<'a>(prefix: char, content: impl IntoIterator<Item = &'a str>) -> String {
+            let mut content = content.into_iter().map(|x| {
+                x.strip_prefix(prefix)
+                    .unwrap_or("")
+                    .trim_start_matches("∩╗┐")
+            });
+
+            let mut buf = content.next().unwrap_or("").to_owned();
+            for line in content {
+                buf += "\n";
+                buf += line;
+            }
+
+            buf
+        }
+
+        ChangesetCsvFormatter {
+            path: changes.path,
+            additions: join_strings('+', changes.additions.iter().cloned()),
+            deletions: join_strings('-', changes.deletions.iter().cloned()),
+        }
     }
 }
 
@@ -86,24 +123,27 @@ pub struct ChangesetParser {
 
 impl ChangesetParser {
     pub fn new() -> Self {
-        ChangesetParser { diff_pattern: Regex::new(r#"diff --git a/(.+) b/(.+)"#).unwrap() }
+        ChangesetParser {
+            diff_pattern: Regex::new(r#"diff --git a/(.+) b/(.+)"#).unwrap(),
+        }
     }
 
-    pub fn changesets<'a, 't>(&'a self, header: &'t Header<'t>, text: &'t str) -> Changesets<'a, 't> {
+    pub fn changesets<'a, 't>(
+        &'a self,
+        header: &'t Header<'t>,
+        text: &'t str,
+    ) -> Changesets<'a, 't> {
         Changesets {
             parser: self,
             header,
-            text
+            text,
         }
     }
 
     fn read_path<'a>(&self, text: &'a str) -> Option<(usize, &'a str)> {
-        self.diff_pattern.captures(text).map(|x| {
-            (
-                x.get(0).unwrap().end(),
-                x.get(2).unwrap().as_str().trim()
-            )
-        })
+        self.diff_pattern
+            .captures(text)
+            .map(|x| (x.get(0).unwrap().end(), x.get(2).unwrap().as_str().trim()))
     }
 
     fn locations<'a>(&'a self, text: &'a str) -> impl Iterator<Item = usize> + 'a {
