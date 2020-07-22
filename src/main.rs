@@ -6,6 +6,15 @@ use patch::{ChangesetCsvFormatter, ChangesetParser, PatchParser};
 use std::io::Read;
 use std::{fs, io};
 
+// Usage:
+// git format-patch `
+//     --stdout 7a73e12a137433d030d10dbc05705ab48240e332..a5d58f842b7de075c3dcc73eefe0f1737fcb28ec `
+//     | sql-changes.exe `
+//     > output.csv
+//
+// The left hash should be the previous version (e.g. v2.13) and the right
+// is the current version (e.g. v2.14).
+
 fn main() -> io::Result<()> {
     let opt = opt::Opt::from_args();
     let patch = match opt.path() {
@@ -25,9 +34,6 @@ fn main() -> io::Result<()> {
             .filter(|x| x.path().contains("/dbo/"));
         sets.extend(extend_from);
     }
-
-    // println!("{:#?}", sets);
-    // println!("Count: {}", sets.len());
 
     let mut writer = match opt.output() {
         Some(path) => Box::new(std::fs::File::create(path)?) as Box<dyn std::io::Write>,
