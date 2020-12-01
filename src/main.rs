@@ -1,12 +1,15 @@
 mod opt;
 mod patch;
 
-use bumpalo::Bump;
-use patch::{Changeset, ChangesetParser, PatchParser};
 use std::{
-    fs,
+    fs::{self, File},
     io::{self, Read},
 };
+
+use bumpalo::Bump;
+use opt::Opt;
+use patch::{Changeset, ChangesetParser, PatchParser};
+use serde::Serialize;
 
 // Usage:
 // git format-patch `
@@ -14,7 +17,7 @@ use std::{
 //     | sql-changes.exe `
 //     > output.json
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Serialize)]
 struct JsonFormatter<'a> {
     path: &'a str,
     additions: String,
@@ -51,15 +54,7 @@ fn main() -> io::Result<()> {
         sets.extend(extend_from);
     }
 
-    let mut writer = opt
-        .output()
-        .and_then(|path| {
-            std::fs::File::open(path)
-                .ok()
-                .map(|file| Box::new(file) as Box<dyn std::io::Write>)
-        })
-        .unwrap_or_else(|| Box::new(io::stdout()));
-
+    let mut writer = get_writer(&opt)?;
     let mapped_sets: Vec<_> = sets.iter().map(|x| JsonFormatter::new(x)).collect();
     serde_json::to_writer_pretty(&mut writer, &mapped_sets)?;
 
@@ -70,4 +65,11 @@ fn read_stdin() -> io::Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
     Ok(buf)
+}
+
+fn get_writer(opt: &Opt) -> io::Result<Box<dyn io::Write>> {
+    match opt.output() {
+        Some(path) => File::open(path).map(|x| Box::new(x) as Box<dyn io::Write>),
+        None => Ok(Box::new(io::stdout())),
+    }
 }
