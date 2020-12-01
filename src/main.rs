@@ -17,6 +17,10 @@ use serde::Serialize;
 //     | sql-changes.exe `
 //     > output.json
 
+// Import into excel as Data > New Query > From Other Sources > Web
+// URL: file:///C:/users/jarcher/src/changes.json
+// Convert to table, then select columns
+
 #[derive(Debug, Serialize)]
 struct JsonFormatter<'a> {
     path: &'a str,
