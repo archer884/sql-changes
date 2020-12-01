@@ -2,18 +2,34 @@ mod opt;
 mod patch;
 
 use bumpalo::Bump;
-use patch::{ChangesetCsvFormatter, ChangesetParser, PatchParser};
-use std::io::Read;
-use std::{fs, io};
+use patch::{Changeset, ChangesetParser, PatchParser};
+use std::{
+    fs,
+    io::{self, Read},
+};
 
 // Usage:
 // git format-patch `
 //     --stdout 7a73e12a137433d030d10dbc05705ab48240e332..a5d58f842b7de075c3dcc73eefe0f1737fcb28ec `
 //     | sql-changes.exe `
-//     > output.csv
-//
-// The left hash should be the previous version (e.g. v2.13) and the right
-// is the current version (e.g. v2.14).
+//     > output.json
+
+#[derive(Debug, serde::Serialize)]
+struct JsonFormatter<'a> {
+    path: &'a str,
+    additions: String,
+    deletions: String,
+}
+
+impl<'a> JsonFormatter<'a> {
+    fn new(changeset: &'a Changeset) -> Self {
+        Self {
+            path: changeset.path(),
+            additions: changeset.additions(),
+            deletions: changeset.deletions(),
+        }
+    }
+}
 
 fn main() -> io::Result<()> {
     let opt = opt::Opt::from_args();
@@ -35,15 +51,17 @@ fn main() -> io::Result<()> {
         sets.extend(extend_from);
     }
 
-    let mut writer = match opt.output() {
-        Some(path) => Box::new(std::fs::File::create(path)?) as Box<dyn std::io::Write>,
-        None => Box::new(io::stdout()),
-    };
-    let mut writer = csv::Writer::from_writer(&mut writer);
+    let mut writer = opt
+        .output()
+        .and_then(|path| {
+            std::fs::File::open(path)
+                .ok()
+                .map(|file| Box::new(file) as Box<dyn std::io::Write>)
+        })
+        .unwrap_or_else(|| Box::new(io::stdout()));
 
-    for record in sets.iter().map(ChangesetCsvFormatter::new) {
-        writer.serialize(record)?;
-    }
+    let mapped_sets: Vec<_> = sets.iter().map(|x| JsonFormatter::new(x)).collect();
+    serde_json::to_writer_pretty(&mut writer, &mapped_sets)?;
 
     Ok(())
 }

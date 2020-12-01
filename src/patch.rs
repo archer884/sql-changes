@@ -1,14 +1,14 @@
 use regex::Regex;
 use serde::Serialize;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Header<'a> {
     hash: &'a str,
     author: &'a str,
     date: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Changeset<'a> {
     header: &'a Header<'a>,
     path: &'a str,
@@ -20,41 +20,13 @@ impl Changeset<'_> {
     pub fn path(&self) -> &str {
         self.path
     }
-}
 
-#[derive(Debug, Serialize)]
-pub struct ChangesetCsvFormatter<'a> {
-    #[serde(rename = "File")]
-    path: &'a str,
-    #[serde(rename = "Deletions")]
-    deletions: String,
-    #[serde(rename = "Additions")]
-    additions: String,
-}
+    pub fn additions(&self) -> String {
+        self.additions.join("\n")
+    }
 
-impl<'a> ChangesetCsvFormatter<'a> {
-    pub fn new(changes: &'a Changeset) -> Self {
-        fn join_strings<'a>(prefix: char, content: impl IntoIterator<Item = &'a str>) -> String {
-            let mut content = content.into_iter().map(|x| {
-                x.strip_prefix(prefix)
-                    .unwrap_or("")
-                    .trim_start_matches("∩╗┐")
-            });
-
-            let mut buf = content.next().unwrap_or("").to_owned();
-            for line in content {
-                buf += "\n";
-                buf += line;
-            }
-
-            buf
-        }
-
-        ChangesetCsvFormatter {
-            path: changes.path,
-            additions: join_strings('+', changes.additions.iter().cloned()),
-            deletions: join_strings('-', changes.deletions.iter().cloned()),
-        }
+    pub fn deletions(&self) -> String {
+        self.deletions.join("\n")
     }
 }
 
